@@ -13,7 +13,8 @@
 import { AST, Rule } from 'eslint';
 import { ImportCache } from '../private/import-cache';
 
-const importCache = new ImportCache();
+let importCache = new ImportCache();
+let alreadyImportedCoreConstruct: boolean;
 
 export function create(context: Rule.RuleContext): Rule.NodeListener {
   // skip core
@@ -22,6 +23,10 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
   }
 
   return {
+    Program: _ => {
+      alreadyImportedCoreConstruct = false;
+    },
+
     // collect all "import" statements. we will later use them to determine
     // exactly how to import `core.Construct`.
     ImportDeclaration: node => {
@@ -33,6 +38,22 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
             case 'ImportNamespaceSpecifier': return s.local.name;
           }
         };
+
+        if (typeName() === 'CoreConstruct') {
+          if (node.specifiers.length > 1) {
+            context.report({
+              message: 'hey',
+              node,
+            });
+          }
+          if (alreadyImportedCoreConstruct) {
+            context.report({
+              message: 'heyhey',
+              node,
+            });
+          }
+          alreadyImportedCoreConstruct = true;
+        }
 
         importCache.record({
           fileName: context.getFilename(),

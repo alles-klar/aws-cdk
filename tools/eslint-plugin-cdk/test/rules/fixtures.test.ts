@@ -13,6 +13,7 @@ const linter = new ESLint({
       quotes: [ 'error', 'single', { avoidEscape: true }],
       'rulesdir/no-core-construct': [ 'error' ],
       'rulesdir/no-qualified-construct': [ 'error' ],
+      'rulesdir/import-core-last': [ 'error' ],
     }
   },
   rulePaths: [
