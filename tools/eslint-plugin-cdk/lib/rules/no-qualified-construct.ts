@@ -10,10 +10,17 @@
 // instead.
 //
 
+import { Node } from 'estree';
 import { AST, Rule } from 'eslint';
 import { ImportCache } from '../private/import-cache';
 
+interface ImportOrderViolation {
+  node: Node;
+  range: [number, number];
+}
+
 const importCache = new ImportCache();
+let importOrderViolation: ImportOrderViolation | undefined;
 
 export function create(context: Rule.RuleContext): Rule.NodeListener {
   // skip core
@@ -22,10 +29,15 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
   }
 
   return {
+    Program: _ => {
+      // reset for every file
+      importOrderViolation = undefined;
+    },
+
     // collect all "import" statements. we will later use them to determine
     // exactly how to import `core.Construct`.
     ImportDeclaration: node => {
-      for (const s of node.specifiers) {
+      for (const [i, s] of node.specifiers.entries()) {
         const typeName = () => {
           switch (s.type) {
             case 'ImportSpecifier': return s.imported.name;
@@ -33,6 +45,17 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
             case 'ImportNamespaceSpecifier': return s.local.name;
           }
         };
+
+        if (s.local.name === 'CoreConstruct' && s.range) {
+          if (node.specifiers.length > 1) {
+            // if there is more than one specifier on the line that also imports CoreConstruct, i.e.,
+            // `import { Resource, Construct as CoreConstruct, Token } from '@aws-cdk/core'`
+
+            // If this is the last specifier, delete just that. If not, delete until the beginning of the next specifier.
+            const range: [number, number] = (i === node.specifiers.length - 1) ? s.range : [s.range[0], node.specifiers[i + 1].range![0]];
+            importOrderViolation = { node, range };
+          }
+        }
 
         importCache.record({
           fileName: context.getFilename(),
@@ -47,10 +70,12 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
     ClassDeclaration: node => {
       if (node.superClass?.type === 'MemberExpression') {
         const sc = node.superClass;
-        // const qualifier = sc.object.type === 'Identifier' ? sc.object.name : undefined;
         const baseClass = sc.property.type === 'Identifier' ? sc.property.name : undefined;
         if (baseClass === 'Construct' && sc.range) {
           report(context, node, sc.range);
+        }
+        if (baseClass === 'CoreConstruct') {
+          reportImportOrderViolations(context);
         }
       }
     },
@@ -62,7 +87,35 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
       if (type?.type === 'TSQualifiedName' && type?.right.name === 'Construct' && type?.left.name !== 'constructs') {
         report(context, node, typeAnnotation.range);
       }
+      if (node.name === 'CoreConstruct') {
+        reportImportOrderViolations(context);
+      }
     },
+  }
+}
+
+function reportImportOrderViolations(context: Rule.RuleContext) {
+  if (importOrderViolation) {
+    const violation = importOrderViolation;
+    context.report({
+      message: 'To avoid merge conflicts with the v2 branch, "CoreConstruct" import should be in its own line',
+      node: violation.node,
+      fix: fixer => {
+        const fixes: Rule.Fix[] = [];
+
+        fixes.push(fixer.removeRange(violation.range));
+        const imports = importCache.imports.filter(x => x.fileName === context.getFilename());
+        const lastImport = imports[imports.length - 1];
+        fixes.push(fixer.insertTextAfter(lastImport.importNode, [
+          "",
+          "",
+          "// keep this import separate from other imports to reduce chance for merge conflicts with v2-main",
+          "// eslint-disable-next-line no-duplicate-imports, import/order",
+          "import { Construct as CoreConstruct } from '@aws-cdk/core'",
+        ].join('\n')));
+        return fixes;
+      }
+    });
   }
 }
 
