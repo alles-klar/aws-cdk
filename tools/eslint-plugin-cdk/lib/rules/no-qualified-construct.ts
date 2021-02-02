@@ -21,6 +21,7 @@ interface ImportOrderViolation {
 
 const importCache = new ImportCache();
 let importOrderViolation: ImportOrderViolation | undefined;
+let coreConstructImportNode: Node | undefined;
 
 export function create(context: Rule.RuleContext): Rule.NodeListener {
   // skip core
@@ -32,22 +33,19 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
     Program: _ => {
       // reset for every file
       importOrderViolation = undefined;
+      coreConstructImportNode = undefined;
     },
 
     // collect all "import" statements. we will later use them to determine
     // exactly how to import `core.Construct`.
     ImportDeclaration: node => {
       for (const [i, s] of node.specifiers.entries()) {
-        const typeName = () => {
-          switch (s.type) {
-            case 'ImportSpecifier': return s.imported.name;
-            case 'ImportDefaultSpecifier': return s.local.name;
-            case 'ImportNamespaceSpecifier': return s.local.name;
-          }
-        };
-
-        if (s.local.name === 'CoreConstruct' && s.range) {
-          if (node.specifiers.length > 1) {
+        if (coreConstructImportNode && coreConstructImportNode.range) {
+          importOrderViolation = { node: coreConstructImportNode, range: coreConstructImportNode.range };
+        }
+        if (s.local.name === 'CoreConstruct') {
+          coreConstructImportNode = node;
+          if (node.specifiers.length > 1 && s.range) {
             // if there is more than one specifier on the line that also imports CoreConstruct, i.e.,
             // `import { Resource, Construct as CoreConstruct, Token } from '@aws-cdk/core'`
 
@@ -57,6 +55,13 @@ export function create(context: Rule.RuleContext): Rule.NodeListener {
           }
         }
 
+        const typeName = () => {
+          switch (s.type) {
+            case 'ImportSpecifier': return s.imported.name;
+            case 'ImportDefaultSpecifier': return s.local.name;
+            case 'ImportNamespaceSpecifier': return s.local.name;
+          }
+        };
         importCache.record({
           fileName: context.getFilename(),
           typeName: typeName(),
